@@ -1,0 +1,28 @@
+# UTF-8
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 3, 0, 0),
+    prodvers=(1, 3, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        '080404b0',
+        [StringStruct('CompanyName', '个人工具'),
+         StringStruct('FileDescription', 'JM 漫画下载器（命令行）'),
+         StringStruct('FileVersion', '1.3.0'),
+         StringStruct('InternalName', 'jmfav-cli'),
+         StringStruct('LegalCopyright', '仅供个人备份自己已收藏、有权访问的内容使用'),
+         StringStruct('OriginalFilename', 'jmfav-cli.exe'),
+         StringStruct('ProductName', 'JM 下载器'),
+         StringStruct('ProductVersion', '1.3.0')])
+    ]),
+    VarFileInfo([VarStruct('Translation', [2052, 1200])])
+  ]
+)

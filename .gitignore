@@ -1,0 +1,36 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ---- 虚拟环境 ----
+.venv/
+venv/
+env/
+
+# ---- 构建产物（用 build.py 现场生成，不进仓库）----
+build/
+dist/
+release/
+*.spec
+
+# ---- 运行时生成 ----
+# 用户配置里含账号名与登录 cookies，绝对不能进仓库
+config.json
+downloads/
+.jmtmp/
+*.zip.part
+
+# ---- 测试临时产物 ----
+tests/_*.png
+tests/*.log
+tests/title_samples.json
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+*.lnk

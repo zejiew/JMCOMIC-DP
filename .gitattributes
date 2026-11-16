@@ -1,0 +1,15 @@
+# 统一用 LF 存进仓库，检出时按平台自动转换
+* text=auto eol=lf
+
+# Windows 批处理/VBS 必须保持 CRLF，否则 cmd 解析会出问题
+*.bat text eol=crlf
+*.vbs text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制，不做任何换行处理
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.zip binary
+*.exe binary
