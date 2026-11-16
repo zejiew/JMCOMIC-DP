@@ -88,10 +88,10 @@ def main():
     dirs = [n.split('/')[0] for n in names if '/' in n]
     check('章节名限长', all(len(d) <= 96 for d in dirs), [len(d) for d in dirs])
 
-    # 3. 超长标题截断
+    # 3. 超长标题截断（作者前缀 [作者] 不占字数上限，作品名本身截到 30 字）
     r, names, _ = run('标题' * 100, [('1', '1', 'a')], max_chars=30)
-    check('标题截到 30 字', len(os.path.basename(r.path)) == 30 + 4,
-          os.path.basename(r.path)[:40])
+    stem = os.path.basename(r.path)[:-len('.zip')]
+    check('标题截到 30 字', stem == '[作者] ' + '标题' * 15, stem)
 
     # 4. 中文标点与特殊符号保留
     r, _, _ = run('引号「」·波浪～破折—省略…', [('1', '1', 'a')], max_chars=0)

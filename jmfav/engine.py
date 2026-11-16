@@ -31,9 +31,14 @@ from .naming import build_archive_name, sanitize_filename
 
 @dataclass
 class AlbumStub:
-    """收藏夹列表里的一条记录（还没拉详情）。"""
+    """收藏夹/搜索列表里的一条记录（还没拉详情）。
+
+    ``author`` 只有列表接口顺手带回来时才有值；为空不影响下载，
+    下载时会从详情里再取一次。
+    """
     album_id: str
     title: str
+    author: str = ''
 
 
 @dataclass
@@ -75,6 +80,23 @@ ProgressCb = Callable[[dict], None]
 
 def _noop(_payload: dict) -> None:
     pass
+
+
+def _stub_from(aid, info) -> AlbumStub:
+    """把列表页的一个条目转成 AlbumStub（顺手带上作者，取不到就留空）。
+
+    列表接口返回的 ``info`` 是个 dict：``name`` 一定有，``author`` 只有
+    移动端 API 才有值（网页端解析出来的只有 name/tags），取不到就当空。
+    """
+    try:
+        title = str(info.get('name') or '')
+    except AttributeError:            # 万一不是 dict，退回旧的取法
+        title = ''
+    try:
+        author = str(info.get('author') or '')
+    except AttributeError:
+        author = ''
+    return AlbumStub(str(aid), title, author)
 
 
 # --------------------------------------------------------------------------- #
@@ -218,8 +240,7 @@ class JmEngine:
             if should_stop():
                 raise Cancelled()
             page = client.favorite_folder(page=page_no, folder_id=folder_id)
-            items = [AlbumStub(str(aid), str(title))
-                     for aid, title in page.iter_id_title()]
+            items = [_stub_from(aid, info) for aid, info in page.content]
             if not items:
                 break
             yield items
@@ -269,8 +290,7 @@ class JmEngine:
                                  time=time, category=category,
                                  sub_category=sub_category)
 
-        items = [AlbumStub(str(aid), str(title))
-                 for aid, title in raw.iter_id_title()]
+        items = [_stub_from(aid, info) for aid, info in raw.content]
         return SearchResult(
             items=items,
             total=int(raw.total or 0),
@@ -391,7 +411,8 @@ class JmEngine:
         title = album.title or stub.title
         result.title = title
 
-        # 智能命名：从「[漢化組][作者] 作品名 (出處) [語言]」里剥出作品名
+        # 智能命名：从「[漢化組][作者] 作品名 (出處) [語言]」里剥出作品名，
+        # 再把作者以 [作者] 前缀加回去（作者与作品名重复时自动不加）
         from .title import clean_title
         short_title = clean_title(title) if name_mode != 'full' else title
         result.short_title = short_title
@@ -405,7 +426,7 @@ class JmEngine:
             date=album.update_date,
             output_dir=output_dir,
             ext='.zip',
-            name_mode='smart',
+            name_mode=name_mode,
             raw_title=title,
         )
         zip_path = os.path.join(output_dir, archive + '.zip')
@@ -413,7 +434,7 @@ class JmEngine:
         result.path = zip_path
 
         if short_title != title:
-            self._log(f'命名：{short_title}')
+            self._log(f'命名：{archive}')
 
         # 2. 已存在且是合法 zip 就跳过
         if skip_existing and os.path.exists(zip_path) and zipfile.is_zipfile(zip_path):

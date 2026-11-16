@@ -2,6 +2,7 @@
 
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -86,6 +87,66 @@ def main():
     })
     app.update()
     check('翻页追加', len(app.tab_search.albums) == 3, str(len(app.tab_search.albums)))
+
+    # ---- 翻页真的请求了第 2 页（回归：以前 _page_search 会被 _do_search 重置回第 1 页）----
+    calls = []
+
+    class PagingEngine:
+        logged_in = True
+        client = object()
+
+        def search(self, keyword, page=1, order_by='mr', category='0', **kw):
+            calls.append(page)
+            return SearchResult(
+                items=[AlbumStub(f'{page}{i}', f'第{page}页作品{i}') for i in range(2)],
+                total=8, page=page, page_count=3)
+
+    app.engine = PagingEngine()
+    app.var_search.set('翻页')
+    app.tab_search.set_albums([])
+    app._search_page, app._search_pages = 1, 3
+
+    def wait_idle(times=300):
+        for _ in range(times):
+            app.update()
+            time.sleep(0.01)
+            if not app._searching:
+                return
+        raise RuntimeError('搜索没结束')
+
+    app._do_search(reset=True)
+    wait_idle()
+    check('首次搜索请求第 1 页', calls == [1], str(calls))
+    check('首次搜索是替换', len(app.tab_search.albums) == 2,
+          str(len(app.tab_search.albums)))
+
+    app._page_search(+1)
+    wait_idle()
+    check('下一页请求第 2 页', calls == [1, 2], str(calls))
+    check('下一页页码推进', app._search_page == 2, str(app._search_page))
+    check('第 2 页结果追加而非替换', len(app.tab_search.albums) == 4,
+          str(len(app.tab_search.albums)))
+    check('第 2 页条目确实在列表里',
+          any('第2页' in a.title for a in app.tab_search.albums),
+          str([a.title for a in app.tab_search.albums]))
+
+    app._page_search(+1)
+    wait_idle()
+    check('再下一页请求第 3 页', calls == [1, 2, 3], str(calls))
+
+    app._page_search(+1)
+    app.update()
+    check('末页不再往后翻', calls == [1, 2, 3], str(calls))
+
+    app._page_search(-1)
+    wait_idle()
+    check('上一页请求第 2 页', calls == [1, 2, 3, 2], str(calls))
+    check('上一页页码回退', app._search_page == 2, str(app._search_page))
+
+    app._search_page = 1
+    app._page_search(-1)
+    app.update()
+    check('首页不再往前翻', calls == [1, 2, 3, 2], str(calls))
 
     # 车号直达
     app._on_search_result({

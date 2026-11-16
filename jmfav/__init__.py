@@ -29,11 +29,12 @@
 """
 
 from .ids import looks_like_id, parse_album_id, parse_album_ids
-from .naming import build_archive_name, sanitize_filename, truncate_title
+from .naming import (author_tagged, build_archive_name, clean_author,
+                     sanitize_filename, truncate_title)
 from .paths import CONFIG_PATH, DEFAULT_OUTPUT, app_dir
 from .title import clean_title
 
-__version__ = '1.3.0'
+__version__ = '1.3.1'
 
 __all__ = [
     'JmEngine',
@@ -48,6 +49,8 @@ __all__ = [
     'build_archive_name',
     'sanitize_filename',
     'truncate_title',
+    'author_tagged',
+    'clean_author',
     'DEFAULT_OUTPUT',
     'CONFIG_PATH',
     'app_dir',

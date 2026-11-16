@@ -29,7 +29,7 @@ from typing import Dict, List, Optional, Tuple
 from . import __version__
 from .engine import AlbumStub, Cancelled, FolderInfo, JmEngine, friendly_error
 from .ids import looks_like_id, parse_album_ids, try_parse_album_id
-from .naming import build_archive_name, truncate_title
+from .naming import author_tagged, build_archive_name, truncate_title
 from .paths import CONFIG_PATH, DEFAULT_OUTPUT, app_dir
 from .theme import (AUTHOR, AUTHOR_ID, CHECK_OFF, CHECK_ON, CREDIT, PALETTE,
                     apply_theme, avatar_photo, f as theme_font, font_family,
@@ -155,6 +155,7 @@ class JmApp(tk.Tk):
         self._last_output_dir = ''
         self._search_page = 1
         self._search_pages = 1
+        self._searching = False       # 一次搜索还在路上时，挡住重复点击
 
         self.cfg = self._load_config()
         self._build_vars()
@@ -718,8 +719,8 @@ class JmApp(tk.Tk):
 
         lab(box, '命名模板').pack(anchor='w')
         ttk.Entry(box, textvariable=self.var_template).pack(fill='x', pady=(2, 1))
-        lab(box, '{title} {id} {author} {date}', hint=True).pack(
-            anchor='w', pady=(0, 7))
+        lab(box, '{title} {id} {author} {date}（默认 {title} 已自动带作者）',
+            hint=True).pack(anchor='w', pady=(0, 7))
 
         row = ttk.Frame(box)
         row.pack(fill='x', pady=(0, 7))
@@ -831,9 +832,18 @@ class JmApp(tk.Tk):
             row_no += 1
 
     def _preview_name(self, album: AlbumStub, mode: str, limit: int) -> str:
+        """列表里那一列「命名预览」——尽量和落盘时的名字一致（含作者）。
+
+        顺序与 ``build_archive_name`` 保持一致：先截断作品名，再加 ``[作者]``
+        前缀（作者不占字数上限）；完整原标题模式原样显示。
+        """
         name = album.title if mode == 'full' else clean_title(album.title)
         name, _ = truncate_title(name, limit)
-        return name or album.title
+        if not name:
+            return album.title
+        if mode != 'full':
+            name = author_tagged(name, getattr(album, 'author', ''))
+        return name
 
     # 下面这些是给测试与右键菜单用的「当前页」快捷入口
 
@@ -996,6 +1006,8 @@ class JmApp(tk.Tk):
                     self._on_albums(payload)
                 elif kind == 'search':
                     self._on_search_result(payload)
+                elif kind == 'search_idle':
+                    self._searching = False
                 elif kind == 'download_done':
                     self._on_download_done(payload)
                 elif kind == 'error':
@@ -1125,23 +1137,37 @@ class JmApp(tk.Tk):
 
     # ------------------------------------------------------------------ 搜索
 
-    def _do_search(self, reset: bool = True) -> None:
+    def _do_search(self, reset: bool = True, page: Optional[int] = None,
+                   append: bool = False) -> None:
+        """发起一次搜索。
+
+        :param reset: 新的一轮搜索（换关键词/排序/分类）——页码归 1，列表替换
+        :param page: 指定页码（翻页时用）；省略则按 ``reset`` 取 1 或当前页
+        :param append: 结果追加到已有列表（翻页）而不是替换
+        """
         if not self._require_login():
             return
+        if self._searching:
+            return
+
         keyword = self.var_search.get().strip()
         if not keyword:
             messagebox.showinfo(APP_TITLE, '请输入搜索关键词或车号')
             return
 
+        if page is None:
+            page = 1 if reset else self._search_page
+        page = max(1, int(page))
         if reset:
-            self._search_page = 1
-        page = self._search_page
+            append = False
+        self._search_page = page
 
         order = next((v for lb, v in ORDER_CHOICES
                       if lb == self.var_search_order.get()), 'mr')
         category = next((v for lb, v in CATEGORY_CHOICES
                          if lb == self.var_search_cat.get()), '0')
 
+        self._searching = True
         self._set_busy(True)
         self.var_status.set(f'搜索「{keyword}」第 {page} 页…')
 
@@ -1150,23 +1176,31 @@ class JmApp(tk.Tk):
                 result = self.engine.search(keyword, page=page,
                                             order_by=order, category=category)
                 self._post('search', {'result': result, 'keyword': keyword,
-                                      'mode': 'replace' if reset else 'append'})
+                                      'mode': 'append' if append else 'replace'})
             except Exception as exc:
                 msg = friendly_error(exc)
                 self._post('log', f'搜索失败：{msg}')
                 self._post('error', f'搜索失败：\n{msg}')
             finally:
+                self._post('search_idle', True)
                 self._post('busy', False)
                 self._post('status', '就绪')
 
         threading.Thread(target=work, daemon=True).start()
 
     def _page_search(self, delta: int) -> None:
-        target = self._search_page + delta
-        if target < 1 or (self._search_pages and target > self._search_pages):
+        """上一页 / 下一页：翻到相邻页并把结果**追加**进列表。"""
+        if self._searching:
             return
-        self._search_page = target
-        self._do_search(reset=True)
+        if not self.var_search.get().strip():
+            messagebox.showinfo(APP_TITLE, '请先输入关键词搜索一次')
+            return
+        target = self._search_page + delta
+        if target < 1:
+            return
+        if self._search_pages and target > self._search_pages:
+            return
+        self._do_search(reset=False, page=target, append=True)
 
     def _on_search_result(self, payload: dict) -> None:
         result = payload['result']

@@ -126,7 +126,8 @@ def main():
     with zipfile.ZipFile(r2.path) as zf:
         n2 = zf.namelist()
     check('单章不建子目录', all('/' not in n for n in n2), n2[:2])
-    check('单章文件名', os.path.basename(r2.path) == '短标题.zip')
+    check('单章文件名', os.path.basename(r2.path) == '[测试作者] 短标题.zip',
+          os.path.basename(r2.path))
 
     # 3. 已存在则跳过
     r3, _ = run(long_title, photos=3, per_photo=4, max_chars=26, output_dir=out)
@@ -142,10 +143,14 @@ def main():
     check('非法字符不出现', not any(c in os.path.basename(r5.path) for c in '<>:"/\\|?*'),
           os.path.basename(r5.path))
 
-    # 6. 模板 + 压缩级别
+    # 6. 模板 + 压缩级别（模板里写了 {author} → 不再自动加作者前缀）
     r6, _ = run('模板测试', photos=1, per_photo=3, template='{id} {title}', compress=6)
-    check('模板生效', os.path.basename(r6.path) == '123456 模板测试.zip',
+    check('模板生效', os.path.basename(r6.path) == '123456 [测试作者] 模板测试.zip',
           os.path.basename(r6.path))
+    r6b, _ = run('模板测试', photos=1, per_photo=3,
+                 template='{title} - {author}', compress=0)
+    check('模板自写作者不重复', os.path.basename(r6b.path) == '模板测试 - 测试作者.zip',
+          os.path.basename(r6b.path))
     with zipfile.ZipFile(r6.path) as zf:
         check('压缩写入正常', zf.testzip() is None and len(zf.namelist()) == 3)
 

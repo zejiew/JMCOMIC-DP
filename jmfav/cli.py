@@ -64,7 +64,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--max-chars', type=int, default=60,
                    help='标题最多保留多少字，超出截断（0 = 不限制）')
     p.add_argument('--template', default='{title}',
-                   help='命名模板，可用 {title} {id} {author} {date}')
+                   help='命名模板，可用 {title} {id} {author} {date}；'
+                        '默认 {title} 已自动带作者前缀 [作者] 作品名')
 
     # ---- 下载 ----
     p.add_argument('-t', '--threads', type=int, default=8, help='每章并行下载图片数')
@@ -176,13 +177,18 @@ def main(argv=None) -> int:
             try:
                 album = engine.client.get_album_detail(stub.album_id)
                 raw = album.title
+                author = album.author
             except Exception:
                 raw = stub.title
+                author = getattr(stub, 'author', '')
             name = raw if args.name_mode == 'full' else clean_title(raw)
             final = build_archive_name(name, max_chars=args.max_chars,
                                        template=args.template,
                                        album_id=stub.album_id,
-                                       output_dir=args.output)
+                                       author=author,
+                                       output_dir=args.output,
+                                       name_mode=args.name_mode,
+                                       raw_title=raw)
             print(f'  {stub.album_id}  →  {final}.zip')
             if name != raw:
                 print(f'        原标题：{raw}')

@@ -2,7 +2,7 @@
 
 import os
 
-VERSION = '1.3.0'
+VERSION = '1.3.1'
 COMPANY = '个人工具'
 PRODUCT = 'JM 下载器'
 DESC = 'JM 漫画批量下载器'
@@ -47,7 +47,8 @@ VSVersionInfo(
   ]
 )
 """
-    with open(path, 'w', encoding='utf-8') as fp:
+    # newline='\n'：仓库里统一 LF，别让 Windows 默认的 CRLF 每次都抖出一遍假 diff
+    with open(path, 'w', encoding='utf-8', newline='\n') as fp:
         fp.write(text)
     print('已生成', path)
 
