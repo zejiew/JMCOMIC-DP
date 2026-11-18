@@ -71,6 +71,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('-t', '--threads', type=int, default=8, help='每章并行下载图片数')
     p.add_argument('--compress', type=int, default=0, help='zip 压缩级别 0-9（0 = 不压缩）')
     p.add_argument('--no-skip', action='store_true', help='不跳过已存在的压缩包')
+    p.add_argument('--no-split', action='store_true',
+                   help='整本合成一个压缩包（默认按章节拆成小包）')
     p.add_argument('--format', default='auto',
                    choices=['auto', 'webp', 'jpeg', 'png'],
                    help='解密后重新编码的图片格式，auto = 跟随原图')
@@ -172,12 +174,17 @@ def main(argv=None) -> int:
     if args.dry_run:
         from .title import clean_title
         from .naming import build_archive_name
+        from .engine import chapter_archive_base
+
+        split = not args.no_split
         print(f'\n将要下载 {len(albums)} 个：')
         for stub in albums:
+            episodes = []
             try:
                 album = engine.client.get_album_detail(stub.album_id)
                 raw = album.title
                 author = album.author
+                episodes = list(album.episode_list or [])
             except Exception:
                 raw = stub.title
                 author = getattr(stub, 'author', '')
@@ -192,6 +199,26 @@ def main(argv=None) -> int:
             print(f'  {stub.album_id}  →  {final}.zip')
             if name != raw:
                 print(f'        原标题：{raw}')
+
+            # 分章模式下把每章的包名列出来，最多 3 条，其余折成一行统计
+            if not split:
+                continue
+            if len(episodes) <= 1:
+                print('        单章本子，仍是整本一个包')
+                continue
+
+            heads = []
+            for order, (pid, pindex, pname) in enumerate(episodes, start=1):
+                try:
+                    no = int(pindex)
+                except (TypeError, ValueError):
+                    no = order
+                heads.append(chapter_archive_base(no, str(pname or ''),
+                                                  args.output, final))
+            for head in heads[:3]:
+                print(f'        {head}.zip')
+            if len(heads) > 3:
+                print(f'        …… 共 {len(heads)} 个章节包')
         return 0
 
     print(f'\n开始下载 {len(albums)} 个本子 → {args.output}')
@@ -207,6 +234,7 @@ def main(argv=None) -> int:
         image_format=args.format,
         image_quality=quality,
         name_mode=args.name_mode,
+        split_chapters=not args.no_split,
     )
 
     ok = sum(1 for r in results if r.ok and not r.skipped)

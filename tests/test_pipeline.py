@@ -78,19 +78,20 @@ class FakeClient:
 
 
 def run(title, photos=2, per_photo=3, max_chars=60, template='{title}', compress=0,
-        threads=4, skip=True, output_dir=None):
+        threads=4, skip=True, output_dir=None, split=False, album_id='123456'):
     output_dir = output_dir or tempfile.mkdtemp(prefix='jmtest-')
     engine = JmEngine(log=lambda s: None)
     engine.client = FakeClient(title, photos, per_photo)
 
     from jmfav.engine import AlbumStub
     results = engine.download_albums(
-        [AlbumStub('123456', title)], output_dir,
+        [AlbumStub(album_id, title)], output_dir,
         max_title_chars=max_chars,
         template=template,
         compress_level=compress,
         image_threads=threads,
         skip_existing=skip,
+        split_chapters=split,
     )
     return results[0], output_dir
 

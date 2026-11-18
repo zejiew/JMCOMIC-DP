@@ -281,6 +281,7 @@ class JmApp(tk.Tk):
             'image_format': self.var_format.get() or 'auto',
             'image_quality': self._int(self.var_quality.get(), 90),
             'name_mode': self._var_name_mode_value(),
+            'split_chapters': bool(self.var_split.get()),
             'proxy': self.var_proxy.get().strip(),
             'cookies': self.cfg.get('cookies') or {},
         }
@@ -301,6 +302,7 @@ class JmApp(tk.Tk):
         self.var_order.set(bool(self.cfg.get('order_by_name', False)))
         self.var_format.set(self.cfg.get('image_format') or 'auto')
         self.var_quality.set(str(self.cfg.get('image_quality', 90)))
+        self.var_split.set(bool(self.cfg.get('split_chapters', True)))
         self.var_proxy.set(self.cfg.get('proxy') or '')
 
         mode = self.cfg.get('name_mode') or 'smart'
@@ -334,6 +336,7 @@ class JmApp(tk.Tk):
         self.var_order = tk.BooleanVar(value=False)
         self.var_format = tk.StringVar(value='auto')
         self.var_quality = tk.StringVar(value='90')
+        self.var_split = tk.BooleanVar(value=True)
         self.var_name_mode = tk.StringVar(value=NAME_MODE_CHOICES[0][0])
         self.var_proxy = tk.StringVar(value='')
         self.var_filter = tk.StringVar()
@@ -746,6 +749,10 @@ class JmApp(tk.Tk):
                         variable=self.var_skip).pack(anchor='w')
         ttk.Checkbutton(box, text='章节按名称自然排序', style='Cute.TCheckbutton',
                         variable=self.var_order).pack(anchor='w', pady=(1, 6))
+        ttk.Checkbutton(box, text='按章节拆成小压缩包', style='Cute.TCheckbutton',
+                        variable=self.var_split).pack(anchor='w')
+        lab(box, '每章一个 zip（001 作品名 第1话.zip），单章本子仍整本打包',
+            hint=True).pack(anchor='w', pady=(1, 6))
 
         lab(box, '代理（留空走系统代理）').pack(anchor='w')
         ttk.Entry(box, textvariable=self.var_proxy).pack(fill='x', pady=(2, 4))
@@ -1353,6 +1360,7 @@ class JmApp(tk.Tk):
         image_format = self.var_format.get() or 'auto'
         image_quality = max(50, min(100, self._int(self.var_quality.get(), 90)))
         name_mode = self._var_name_mode_value()
+        split = bool(self.var_split.get())
 
         self.engine.image_format = image_format
         self.engine.image_quality = image_quality
@@ -1373,6 +1381,7 @@ class JmApp(tk.Tk):
                     image_format=image_format,
                     image_quality=image_quality,
                     name_mode=name_mode,
+                    split_chapters=split,
                     progress=lambda p: self._post('progress', p),
                     should_stop=self.stop_flag.is_set,
                 )
@@ -1401,9 +1410,11 @@ class JmApp(tk.Tk):
             self.var_progress.set(0.0)
         elif kind == 'photo_start':
             self.var_progress.set(0.0)
+            mark = '已存在' if payload.get('skipped') else \
+                f'{payload.get("images_done", 0)} 张'
             self.var_progress_text.set(
                 f'章节 {payload["photo_index"]}/{payload["photo_total"]}'
-                f' · {payload.get("images_done", 0)} 张')
+                f' · {mark}')
         elif kind == 'image_done':
             done = payload.get('images_done', 0)
             total = max(1, payload.get('images_total') or 1)

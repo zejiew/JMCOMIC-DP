@@ -37,7 +37,8 @@ def main():
     t0 = time.time()
     r = engine.download_albums([AlbumStub(album_id, album.title)], out,
                                max_title_chars=40, image_threads=12,
-                               skip_existing=False, progress=on_progress)[0]
+                               skip_existing=False, progress=on_progress,
+                               split_chapters=False)[0]
     cost = time.time() - t0
 
     print(f'\n耗时 {cost:.1f}s · {r.images} 张 · {r.images / cost:.1f} 张/秒')

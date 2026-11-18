@@ -15,7 +15,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 DIST = os.path.join(ROOT, 'dist')
 RELEASE = os.path.join(ROOT, 'release')
 
-VERSION = '1.3.1'
+VERSION = '1.3.2'
 NAME = f'JM下载器-v{VERSION}-win64'
 
 

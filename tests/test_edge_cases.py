@@ -54,13 +54,14 @@ class FakeClient:
         return FakeResp(self.blob)
 
 
-def run(title, episodes, suffix='.webp', max_chars=60):
+def run(title, episodes, suffix='.webp', max_chars=60, split=False):
     out = tempfile.mkdtemp(prefix='jmedge-')
     eng = JmEngine(log=lambda s: None)
     eng.client = FakeClient(title, episodes, suffix=suffix)
     r = eng.download_albums([AlbumStub('999', title)], out,
-                            max_title_chars=max_chars, skip_existing=False)[0]
-    with zipfile.ZipFile(r.path) as zf:
+                            max_title_chars=max_chars, skip_existing=False,
+                            split_chapters=split)[0]
+    with zipfile.ZipFile(r.paths[0] if r.paths else r.path) as zf:
         names = zf.namelist()
     return r, names, out
 
@@ -109,6 +110,54 @@ def main():
     # 7. 单章不带目录
     r, names, _ = run('单章', [('1', '1', 'a')], max_chars=0)
     check('单章无子目录', all('/' not in n for n in names), names)
+
+    # 8. 分章模式：每章一个包、编号补零、包里不带子目录
+    eps8 = [(str(i), str(i), f'第{i}话') for i in range(1, 4)]
+    r, names, out8 = run('分章', eps8, max_chars=0, split=True)
+    files = sorted(f for f in os.listdir(out8) if f.endswith('.zip'))
+    check('分章生成 3 个包', len(files) == 3 and r.ok and len(r.paths) == 3,
+          f'{files} paths={len(r.paths)}')
+    check('分章包名带补零编号', files[0].startswith('001 ') and
+          files[2].startswith('003 '), files)
+    check('分章包名带作品名', all('分章' in f for f in files), files)
+    check('分章包内无子目录', all('/' not in n for n in names), names)
+    check('分章计数是总张数', r.images == 6, str(r.images))
+
+    # 8b. 章节名是空串（禁漫上很常见）时，包名至少还有编号与作品名
+    eps8b = [('1', '1', ''), ('2', '2', ''), ('3', '3', '')]
+    r, _, out8b = run('无名章节', eps8b, max_chars=0, split=True)
+    files = sorted(f for f in os.listdir(out8b) if f.endswith('.zip'))
+    check('空章节名也能认', len(files) == 3 and all('无名章节' in f for f in files),
+          files)
+
+    # 9. 分章模式：同名章节不会互相覆盖
+    eps9 = [('1', '1', '同名'), ('2', '2', '同名')]
+    r, _, out9 = run('重名分章', eps9, max_chars=0, split=True)
+    files = [f for f in os.listdir(out9) if f.endswith('.zip')]
+    check('重名章节各自成包', len(files) == 2, files)
+
+    # 10. 分章模式：另一本书占了同名（无法认领），必须让路而不是跳过
+    r, _, out10 = run('甲', [('1', '1', '第1话'), ('2', '2', '第2话')],
+                      max_chars=0, split=True)
+    first = os.path.join(out10, '001 [作者] 甲 第1话.zip')
+    check('第一本生成 001', os.path.exists(first), sorted(os.listdir(out10)))
+    # 把标记改成别人的书号，模拟「同名不同本」
+    with zipfile.ZipFile(first, 'a') as zf:
+        zf.comment = b'jmsrc:{"album_id":"888888"}'
+    eng = JmEngine(log=lambda s: None)
+    eng.client = FakeClient('甲', [('1', '1', '第1话'), ('2', '2', '第2话')])
+    r10 = eng.download_albums([AlbumStub('999', '甲')], out10,
+                              max_title_chars=0, skip_existing=True,
+                              split_chapters=True)[0]
+    # 换了个书号（888888 → 999），认领不上，必须重下而不是当成自己的跳过
+    check('异本同名重下', not r10.skipped and r10.images == 4,
+          f'skipped={r10.skipped} images={r10.images}')
+
+    # 11. 分章模式：同一本书重下 → 全部跳过（包括刚重下的那个副本）
+    r11 = eng.download_albums([AlbumStub('999', '甲')], out10,
+                              max_title_chars=0, skip_existing=True,
+                              split_chapters=True)[0]
+    check('同本重下跳过', r11.skipped and r11.ok, f'skipped={r11.skipped}')
 
     print('\nRESULT:', 'ALL PASS' if ok else 'HAS FAILURES')
     return 0 if ok else 1

@@ -34,7 +34,7 @@ from .naming import (author_tagged, build_archive_name, clean_author,
 from .paths import CONFIG_PATH, DEFAULT_OUTPUT, app_dir
 from .title import clean_title
 
-__version__ = '1.3.1'
+__version__ = '1.3.2'
 
 __all__ = [
     'JmEngine',

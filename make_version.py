@@ -2,7 +2,7 @@
 
 import os
 
-VERSION = '1.3.1'
+VERSION = '1.3.2'
 COMPANY = '个人工具'
 PRODUCT = 'JM 下载器'
 DESC = 'JM 漫画批量下载器'

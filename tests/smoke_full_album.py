@@ -54,6 +54,7 @@ def main():
     results = engine.download_albums(
         [AlbumStub(album.album_id, album.title)], out,
         max_title_chars=60, image_threads=8, skip_existing=False,
+        split_chapters=False,
     )
     r = results[0]
     print('\n结果：ok=%s images=%d seconds=%s' % (r.ok, r.images, r.seconds))

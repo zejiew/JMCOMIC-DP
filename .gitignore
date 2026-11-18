@@ -26,6 +26,17 @@ downloads/
 tests/_*.png
 tests/*.log
 tests/title_samples.json
+# 测试用 tempfile.mkdtemp 建的目录（某些环境下 TEMP 指向工程目录）
+jmtest-*/
+jmedge-*/
+jmfull-*/
+jmgui-*/
+jmid-*/
+jmsearch-*/
+jmbench-*/
+jmfmt-*/
+jmmulti-*/
+jm-split-*/
 
 # ---- 编辑器 / 系统 ----
 .vscode/

@@ -4,6 +4,12 @@
 再删原图」的三步走，既慢（每张图都要落盘一次）又占空间。我们自己在回调里把
 图片字节直接写进 zip，省掉中间文件。
 
+两种打包形态（``split_chapters`` 控制）：
+
+- 关（旧行为）：整本一个 zip，多章节时包内按「001 章节名」分目录；
+- 开（默认）：每个章节单独一个 zip，直接平铺在输出目录里，形如
+  ``001 [作者] 作品名 第1话.zip``，体积小、可以单章分享/移动。
+
 并发策略：同一章节内的图片用线程池并行「下载 + 解密 + 编码」，但写入 zip 时按
 页码顺序串行，既快又能保证压缩包内的图片顺序不乱、内存占用也受控。
 
@@ -19,10 +25,10 @@ import threading
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Iterable, List, Optional, Sequence, Tuple
 
-from .naming import build_archive_name, sanitize_filename
+from .naming import build_archive_name, fit_to_path_limit, sanitize_filename
 
 
 # --------------------------------------------------------------------------- #
@@ -62,7 +68,8 @@ class SearchResult:
 class AlbumResult:
     album_id: str
     title: str
-    path: str = ''
+    path: str = ''              # 主压缩包（分章模式 = 第一个章节包）
+    paths: List[str] = field(default_factory=list)   # 分章模式下的全部章节包
     images: int = 0
     ok: bool = False
     skipped: bool = False
@@ -73,6 +80,29 @@ class AlbumResult:
 
 class Cancelled(Exception):
     """用户点了取消。"""
+
+
+@dataclass
+class _Job:
+    """一次「下载一个本子」所需的全部上下文（避免长参数列表到处传）。"""
+    client: object
+    album: object
+    photos: List[object]
+    title: str
+    short_title: str
+    work_name: str          # 分章模式下写进每个包名的作品名（已洗、已截断）
+    output_dir: str
+    max_title_chars: int
+    template: str
+    compress_level: int
+    image_threads: int
+    skip_existing: bool
+    result: AlbumResult
+    progress: ProgressCb
+    should_stop: Callable[[], bool]
+    image_format: str
+    image_quality: int
+    name_mode: str
 
 
 ProgressCb = Callable[[dict], None]
@@ -341,10 +371,15 @@ class JmEngine:
                         image_format: Optional[str] = None,
                         image_quality: Optional[int] = None,
                         name_mode: str = 'smart',
+                        split_chapters: bool = True,
                         progress: ProgressCb = _noop,
                         should_stop: Callable[[], bool] = lambda: False,
                         ) -> List[AlbumResult]:
-        """逐个本子下载并打包成 zip，名称取自标题（超长自动截断）。"""
+        """逐个本子下载并打包成 zip，名称取自标题（超长自动截断）。
+
+        ``split_chapters=True`` 时每个章节单独打一个包（平铺在输出目录），
+        否则整本合成一个包、包内按章节分子目录。
+        """
         os.makedirs(output_dir, exist_ok=True)
 
         fmt = (image_format or self.image_format or 'auto').lower()
@@ -368,6 +403,7 @@ class JmEngine:
                     stub, output_dir, max_title_chars, template, int(compress_level),
                     max(1, int(image_threads)), skip_existing, order_by_name,
                     result, progress, should_stop, fmt, quality, name_mode,
+                    split_chapters,
                 )
             except Cancelled:
                 result.error = '已取消'
@@ -403,6 +439,7 @@ class JmEngine:
                       image_format: str = 'auto',
                       image_quality: int = 90,
                       name_mode: str = 'smart',
+                      split_chapters: bool = True,
                       ) -> None:
         client = self._require_client()
 
@@ -417,41 +454,78 @@ class JmEngine:
         short_title = clean_title(title) if name_mode != 'full' else title
         result.short_title = short_title
 
-        archive = build_archive_name(
-            title=short_title,
-            max_chars=max_title_chars,
-            template=template,
-            album_id=album.album_id,
-            author=album.author,
-            date=album.update_date,
-            output_dir=output_dir,
-            ext='.zip',
-            name_mode=name_mode,
-            raw_title=title,
-        )
-        zip_path = os.path.join(output_dir, archive + '.zip')
-        zip_path = _unique_path(zip_path, allow_existing=skip_existing)
-        result.path = zip_path
-
-        if short_title != title:
-            self._log(f'命名：{archive}')
-
-        # 2. 已存在且是合法 zip 就跳过
-        if skip_existing and os.path.exists(zip_path) and zipfile.is_zipfile(zip_path):
-            result.ok = True
-            result.skipped = True
-            result.images = _count_zip_entries(zip_path)
-            self._log(f'[跳过] 已存在：{os.path.basename(zip_path)}')
-            return
-
         photos = list(album)
         if order_by_name:
             photos.sort(key=lambda p: _natural_key(str(p.name)))
         if not photos:
             raise RuntimeError('这个本子没有章节')
 
-        progress({'type': 'album_meta', 'album_id': album.album_id,
-                  'title': title, 'photos': len(photos), 'path': zip_path})
+        # 分章模式下每个包名都要带作品名（章节名经常是空的），
+        # 沿用合并模式的命名规则，保证「作者前缀 / 字数上限 / 模板」行为一致
+        work_name = build_archive_name(
+            title=short_title,
+            max_chars=max_title_chars,
+            template=template,
+            album_id=album.album_id,
+            author=album.author,
+            date=album.update_date,
+            name_mode=name_mode,
+            raw_title=title,
+        )
+
+        job = _Job(
+            client=client, album=album, photos=photos, title=title,
+            short_title=short_title, work_name=work_name,
+            output_dir=output_dir,
+            max_title_chars=max_title_chars, template=template,
+            compress_level=compress_level, image_threads=image_threads,
+            skip_existing=skip_existing, result=result, progress=progress,
+            should_stop=should_stop, image_format=image_format,
+            image_quality=image_quality, name_mode=name_mode,
+        )
+
+        # 只有一个章节的本子没有「分章」可言，仍旧整本一个 zip
+        if split_chapters and len(photos) > 1:
+            self._download_split(job)
+        else:
+            self._download_merged(job)
+
+    def _download_merged(self, job: '_Job') -> None:
+        """整本一个 zip：多章节时包内按「001 章节名」分子目录。"""
+        album, result = job.album, job.result
+
+        archive = build_archive_name(
+            title=job.short_title,
+            max_chars=job.max_title_chars,
+            template=job.template,
+            album_id=album.album_id,
+            author=album.author,
+            date=album.update_date,
+            output_dir=job.output_dir,
+            ext='.zip',
+            name_mode=job.name_mode,
+            raw_title=job.title,
+        )
+        zip_path = os.path.join(job.output_dir, archive + '.zip')
+        zip_path = _unique_path(zip_path, allow_existing=job.skip_existing)
+        result.path = zip_path
+        result.paths = [zip_path]
+
+        if job.short_title != job.title:
+            self._log(f'命名：{archive}')
+
+        # 已存在且是合法 zip 就跳过
+        if job.skip_existing and os.path.exists(zip_path) and zipfile.is_zipfile(zip_path):
+            result.ok = True
+            result.skipped = True
+            result.images = _count_zip_entries(zip_path)
+            self._log(f'[跳过] 已存在：{os.path.basename(zip_path)}')
+            return
+
+        photo_total = len(job.photos)
+        job.progress({'type': 'album_meta', 'album_id': album.album_id,
+                      'title': job.title, 'photos': photo_total,
+                      'path': zip_path})
 
         tmp_path = zip_path + '.part'
         written = 0
@@ -459,46 +533,21 @@ class JmEngine:
 
         try:
             with zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_STORED) as zf, \
-                    ThreadPoolExecutor(max_workers=image_threads) as pool:
-                for p_index, photo in enumerate(photos, start=1):
-                    if should_stop():
+                    ThreadPoolExecutor(max_workers=job.image_threads) as pool:
+                for p_index, photo in enumerate(job.photos, start=1):
+                    if job.should_stop():
                         raise Cancelled()
 
-                    client.check_photo(photo)
-                    if len(photos) > 1:
+                    job.client.check_photo(photo)
+                    if photo_total > 1:
                         arc_dir = _unique_dir_name(used_dirs, sanitize_filename(
-                            f'{photo.index:03d} {photo.name}'.strip()
-                        ) or f'{photo.index:03d}')
+                            f'{_photo_no(photo, p_index):03d} {photo.name}'.strip()
+                        ) or f'{_photo_no(photo, p_index):03d}')
                     else:
                         arc_dir = ''
 
-                    image_list = list(photo)
-                    progress({
-                        'type': 'photo_start', 'album_id': album.album_id,
-                        'title': title, 'photo_index': p_index,
-                        'photo_total': len(photos), 'photo_name': photo.name,
-                        'images': len(image_list), 'images_done': written,
-                    })
-
-                    # 分批并行拉取，按顺序写盘，兼顾速度与顺序、内存可控
-                    batch = max(4, image_threads * 2)
-                    for start in range(0, len(image_list), batch):
-                        if should_stop():
-                            raise Cancelled()
-                        chunk = image_list[start:start + batch]
-                        fetched = pool.map(
-                            lambda img: self._fetch_image(client, img, arc_dir,
-                                                          image_format, image_quality),
-                            chunk,
-                        )
-                        for arc_name, data in fetched:
-                            _zip_write(zf, arc_name, data, compress_level)
-                            written += 1
-                            progress({
-                                'type': 'image_done', 'album_id': album.album_id,
-                                'images_done': written, 'images_total': album.page_count,
-                                'photo_index': p_index, 'photo_total': len(photos),
-                            })
+                    written = self._write_photo(job, zf, pool, photo, p_index,
+                                                arc_dir, written)
 
             os.replace(tmp_path, zip_path)
             result.ok = True
@@ -511,6 +560,111 @@ class JmEngine:
                     os.remove(tmp_path)
                 except OSError:
                     pass
+
+    def _download_split(self, job: '_Job') -> None:
+        """每个章节单独打一个 zip，直接平铺在输出目录。
+
+        文件名形如 ``001 [作者] 作品名 第1话.zip``；同名但认领不上（是别的本子的）
+        就让路成 ``… (2).zip``，绝不把别人的章节当成自己的跳过。
+        """
+        album, result = job.album, job.result
+        photo_total = len(job.photos)
+        os.makedirs(job.output_dir, exist_ok=True)
+
+        written = 0
+        ordered: List[str] = []       # 按章节顺序，包含跳过与新建
+        made = 0
+        skipped = 0
+
+        for p_index, photo in enumerate(job.photos, start=1):
+            if job.should_stop():
+                raise Cancelled()
+
+            base = _chapter_basename(photo, p_index, job.output_dir,
+                                     job.work_name)
+            zip_path, already = _chapter_target(
+                job.output_dir, base, album.album_id, job.skip_existing)
+            ordered.append(zip_path)
+
+            if already:                       # 这一章上次就下好了
+                skipped += 1
+                written += _count_zip_entries(zip_path)
+                result.images = written
+                self._log(f'[跳过] 已存在：{os.path.basename(zip_path)}')
+                job.progress({
+                    'type': 'photo_start', 'album_id': album.album_id,
+                    'title': job.title, 'photo_index': p_index,
+                    'photo_total': photo_total, 'photo_name': photo.name,
+                    'images': 0, 'images_done': written,
+                    'chapter_zip': os.path.basename(zip_path), 'skipped': True,
+                })
+                continue
+
+            job.client.check_photo(photo)
+            job.progress({
+                'type': 'photo_start', 'album_id': album.album_id,
+                'title': job.title, 'photo_index': p_index,
+                'photo_total': photo_total, 'photo_name': photo.name,
+                'images': len(photo), 'images_done': written,
+                'chapter_zip': os.path.basename(zip_path),
+            })
+
+            tmp_path = zip_path + '.part'
+            before = written
+            try:
+                with zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_STORED) as zf, \
+                        ThreadPoolExecutor(max_workers=job.image_threads) as pool:
+                    zf.comment = _marker_bytes(album, photo, p_index)
+                    written = self._write_photo(job, zf, pool, photo, p_index,
+                                                '', written)
+                os.replace(tmp_path, zip_path)
+            finally:
+                if os.path.exists(tmp_path):
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
+
+            made += 1
+            result.images = written
+            self._log(f'[完成] {os.path.basename(zip_path)}（{written - before} 张）')
+
+        result.paths = ordered
+        result.path = ordered[0] if ordered else ''
+        result.ok = True
+        if not made:
+            result.skipped = True
+            self._log(f'[跳过] 全部 {skipped} 个章节包都已存在')
+        else:
+            tail = f'，跳过 {skipped} 个' if skipped else ''
+            self._log(f'[完成] {job.short_title}：{made} 个章节包'
+                      f'（共 {written} 张{tail}）')
+
+    def _write_photo(self, job: '_Job', zf: zipfile.ZipFile, pool,
+                     photo, p_index: int, arc_dir: str, written: int) -> int:
+        """把一个章节的图片按页码顺序写进 zip，返回累计张数。"""
+        image_list = list(photo)
+
+        # 分批并行拉取，按顺序写盘，兼顾速度与顺序、内存可控
+        batch = max(4, job.image_threads * 2)
+        for start in range(0, len(image_list), batch):
+            if job.should_stop():
+                raise Cancelled()
+            chunk = image_list[start:start + batch]
+            fetched = pool.map(
+                lambda img: self._fetch_image(job.client, img, arc_dir,
+                                              job.image_format, job.image_quality),
+                chunk,
+            )
+            for arc_name, data in fetched:
+                _zip_write(zf, arc_name, data, job.compress_level)
+                written += 1
+                job.progress({
+                    'type': 'image_done', 'album_id': job.album.album_id,
+                    'images_done': written, 'images_total': job.album.page_count,
+                    'photo_index': p_index, 'photo_total': len(job.photos),
+                })
+        return written
 
     def _fetch_image(self, client, img, arc_dir: str = '',
                      image_format: str = 'auto',
@@ -603,6 +757,99 @@ def _count_zip_entries(path: str) -> int:
 
 
 _DIGITS_RE = re.compile(r'(\d+)')
+
+
+def _photo_no(photo, fallback: int) -> int:
+    """章节序号：优先用站点给的 ``photo.index``，取不到就用循环序号。"""
+    try:
+        value = int(photo.index)
+    except (TypeError, ValueError, AttributeError):
+        return fallback
+    return value if value > 0 else fallback
+
+
+def _chapter_basename(photo, p_index: int, output_dir: str = '',
+                      album_title: str = '') -> str:
+    """分章模式下的压缩包主名：``001 作品名 第1话``。
+
+    带编号是为了让资源管理器里的排序和阅读顺序一致（否则「第10话」会排到
+    「第2话」前面）。作品名也放进去：禁漫上有大量本子的章节名是空串，只留
+    编号会变成一堆 ``001.zip``、``002.zip``，根本认不出是谁的。
+    """
+    no = _photo_no(photo, p_index)
+    return chapter_archive_base(no, str(getattr(photo, 'name', '') or ''),
+                                output_dir, album_title)
+
+
+def chapter_archive_base(no: int, name: str, output_dir: str = '',
+                         album_title: str = '') -> str:
+    """按「序号 + 作品名 + 章节名」拼压缩包主名（CLI 预览也走同一套规则）。
+
+    章节名与作品名重复时只留一份（有的本子章节名直接就是作品名）。
+    """
+    parts = [f'{no:03d}']
+    work = (album_title or '').strip()
+    chapter = (name or '').strip()
+    if work:
+        parts.append(work)
+    if chapter and chapter.lower() not in work.lower():
+        parts.append(chapter)
+    base = sanitize_filename(' '.join(parts))
+    base = base or f'{no:03d}'
+    if output_dir:
+        base = fit_to_path_limit(base, output_dir, ext='.zip')
+    return base
+
+
+def _chapter_target(output_dir: str, base: str, album_id: str,
+                    skip_existing: bool) -> Tuple[str, bool]:
+    """给章节包找一个落盘路径，返回 ``(路径, 是否可以直接跳过)``。
+
+    只为「同名的上一份是本子自己的」而跳过：靠包里的 ``_marker.json`` 认领。
+    别的本的章节占了名字就让路（(2)(3)…），宁可多下一次，也不把 A 的第 1 话
+    当成 B 的第 1 话跳过去——分章模式最容易踩的坑就是这个。
+    """
+    n = 0
+    while True:
+        suffix = '' if n == 0 else f' ({n + 1})'
+        path = os.path.join(output_dir, f'{base}{suffix}.zip')
+        if not os.path.exists(path):
+            return path, False
+        if (skip_existing and zipfile.is_zipfile(path)
+                and _marker_album_id(path) == str(album_id)):
+            return path, True
+        n += 1
+
+
+def _marker_bytes(album, photo, p_index: int) -> bytes:
+    """章节包的来源标记，写进 zip 的注释字段（不占条目，看图软件不会数错）。"""
+    import json
+
+    payload = {
+        'app': 'jmfav',
+        'album_id': str(getattr(album, 'album_id', '') or ''),
+        'album_title': str(getattr(album, 'title', '') or ''),
+        'photo_id': str(getattr(photo, 'photo_id', '') or ''),
+        'photo_index': _photo_no(photo, p_index),
+        'photo_name': str(getattr(photo, 'name', '') or ''),
+    }
+    text = json.dumps(payload, ensure_ascii=False)
+    return ('jmsrc:' + text).encode('utf-8')
+
+
+def _marker_album_id(path: str) -> str:
+    """读章节包里的来源标记，返回 album_id（没有标记就返回空串）。"""
+    import json
+
+    try:
+        with zipfile.ZipFile(path) as zf:
+            comment = zf.comment or b''
+        if not comment.startswith(b'jmsrc:'):
+            return ''
+        payload = json.loads(comment[6:].decode('utf-8'))
+        return str(payload.get('album_id') or '')
+    except Exception:
+        return ''
 
 
 def _natural_key(text: str):

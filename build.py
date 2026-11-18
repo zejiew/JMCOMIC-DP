@@ -23,7 +23,7 @@ DIST = os.path.join(ROOT, 'dist')
 BUILD = os.path.join(ROOT, 'build')
 
 APP_NAME = 'JM下载器'
-VERSION = '1.3.1'
+VERSION = '1.3.2'
 
 # 必须显式声明的模块（都是函数内延迟 import，PyInstaller 静态分析看不到）
 HIDDEN = [
@@ -157,6 +157,20 @@ def write_readme() -> None:
 想用完整原标题：右栏「命名方式」改成「完整原标题」。
 标题超过「标题最多字数」（默认 60）会自动截断。
 
+打包方式
+--------
+默认「按章节拆成小压缩包」：每一话一个 zip，平铺在输出目录里
+
+  001 [作者] 作品名 第1话.zip
+  002 [作者] 作品名 第2话.zip
+  003 [作者] 作品名 第3话.zip
+
+  · 编号三位补零，排序就是阅读顺序
+  · 作品名在前（禁漫上很多本子的章节名是空的），章节名跟在后面
+  · 单章本子仍是整本一个包，名字用作品名
+  · 想整本合成一个大包：右栏取消勾选「按章节拆成小压缩包」
+  · 分章模式下重跑只补缺的章节，下好的不会被重下
+
 文件位置
 --------
   下载的 zip：程序旁边会建一个 downloads 文件夹
@@ -172,6 +186,7 @@ def write_readme() -> None:
   jmfav-cli.exe -u 用户名 -p 密码
   jmfav-cli.exe -u 用户名 -p 密码 --search 秘密 --search-pages 2
   jmfav-cli.exe -u 用户名 -p 密码 --ids 123456 789012
+  jmfav-cli.exe -u 用户名 -p 密码 --ids 123456 --no-split   整本合成一个包
   jmfav-cli.exe -h                         查看全部参数
 
 常见问题

@@ -29,9 +29,10 @@ def main():
         out = tempfile.mkdtemp(prefix='jmbench-')
         t0 = time.time()
         r = engine.download_albums([AlbumStub(album_id, album.title)], out,
-                                   image_threads=threads, skip_existing=False)[0]
+                                   image_threads=threads, skip_existing=False,
+                                   split_chapters=False)[0]
         cost = time.time() - t0
-        size = os.path.getsize(r.path) / 1024 / 1024
+        size = sum(os.path.getsize(p) for p in (r.paths or [r.path])) / 1024 / 1024
         print(f'  线程 {threads:>2}: {cost:6.2f}s · {r.images:>3} 张 · '
               f'{r.images / cost:5.1f} 张/秒 · {size:5.1f}MB')
         shutil.rmtree(out, ignore_errors=True)
